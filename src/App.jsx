@@ -21,7 +21,6 @@ const getFirebaseConfig = () => {
   if (typeof __firebase_config !== 'undefined') {
     return JSON.parse(__firebase_config);
   }
-  // Hardcoded for Local / Vercel Build (Removed import.meta to avoid esbuild errors)
   return {
     apiKey: "AIzaSyBgCQIlUY43KLOw7W8h29WOgqdeEWy68fY",
     authDomain: "carluckydraw101.firebaseapp.com",
@@ -111,7 +110,7 @@ export default function App() {
       if (docSnap.exists()) { 
         const data = docSnap.data();
         let safeRound = parseInt(data.currentRound);
-        if (isNaN(safeRound)) safeRound = 1; // Auto-fix NaN to 1
+        if (isNaN(safeRound)) safeRound = 1;
 
         setSystemSettings(prev => ({ 
           ...prev, 
@@ -314,7 +313,6 @@ export default function App() {
     e.preventDefault();
     if (!isAdmin || !winNumberInput) return;
     
-    // Safety check for current round
     const activeRound = parseInt(systemSettings.currentRound) || 1;
     const paddedWinNumber = winNumberInput.padStart(3, '0');
     
@@ -337,7 +335,7 @@ export default function App() {
       // 1. Save Winner Summary
       await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'lucky_winners', `round_${activeRound}`), winnerSummary);
 
-      // 2. Update Settings (Deactivate round)
+      // 2. Update Settings
       await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'system_config', 'default'), {
         ...systemSettings,
         isRoundActive: false,
@@ -345,7 +343,7 @@ export default function App() {
         currentRound: activeRound
       });
 
-      // 3. Move all to history (Using Promise.all to bypass 500 batch limit)
+      // 3. Move all to history
       const historyPromises = Object.values(ticketsData).map(t => {
         return setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'lucky_history', `${activeRound}_${t.id}`), {
           ...t,
@@ -367,7 +365,7 @@ export default function App() {
 
     } catch (err) {
       console.error("End Round Error:", err);
-      alert(`Error ending round: ${err.message}. Firebase Rules များကို သေချာစစ်ဆေးပါ။`);
+      alert(`Error ending round: ${err.message}`);
     }
   };
 
@@ -382,6 +380,33 @@ export default function App() {
       isRoundActive: true,
       currentRound: nextRound
     });
+  };
+
+  // ----------------------------------------------------
+  // New Feature: Clear All History Data
+  // ----------------------------------------------------
+  const handleClearHistory = async () => {
+    if (!isAdmin) return;
+    if (!window.confirm("သတိပြုရန်: History နှင့် ကံထူးရှင် မှတ်တမ်းအားလုံးကို အပြီးတိုင် ဖျက်ပစ်မည်မှာ သေချာပါသလား? ဤလုပ်ဆောင်ချက်ကို နောက်ပြန်ဆုတ်၍ မရပါ။")) return;
+
+    try {
+      // Delete all history tickets
+      const historyPromises = historyData.map(h => {
+        return deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'lucky_history', `${h.round}_${h.id}`));
+      });
+      await Promise.all(historyPromises);
+
+      // Delete all winners history
+      const winnerPromises = winnersData.map(w => {
+        return deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'lucky_winners', `round_${w.round}`));
+      });
+      await Promise.all(winnerPromises);
+
+      alert("မှတ်တမ်းဟောင်းများအားလုံးကို အောင်မြင်စွာ ဖျက်ပစ်လိုက်ပါပြီ။");
+    } catch (err) {
+      console.error("Clear History Error:", err);
+      alert("မှတ်တမ်းဖျက်ရာတွင် အမှားအယွင်းရှိနေပါသည်။");
+    }
   };
 
   if (loading) return <div className="min-h-screen flex items-center justify-center text-xl font-bold animate-pulse text-yellow-600">Loading System...</div>;
@@ -642,10 +667,19 @@ export default function App() {
             </div>
           )}
 
-          {/* Admin History Tab */}
+          {/* Admin History Tab (With Clear Button) */}
           {adminTab === 'history' && (
             <div className="animate-in fade-in slide-in-from-bottom-4">
-              <h2 className="text-2xl font-bold mb-6 flex items-center"><Archive className="mr-2 text-gray-500"/> Full Archive History</h2>
+              <div className="flex flex-col sm:flex-row justify-between items-center mb-6 space-y-4 sm:space-y-0">
+                <h2 className="text-2xl font-bold flex items-center"><Archive className="mr-2 text-gray-500"/> Full Archive History</h2>
+                
+                {(historyData.length > 0 || winnersData.length > 0) && (
+                  <button onClick={handleClearHistory} className="bg-red-100 text-red-600 hover:bg-red-600 hover:text-white px-4 py-2 rounded-lg font-bold transition flex items-center shadow-sm border border-red-200 hover:border-red-600">
+                    <Trash2 className="w-5 h-5 mr-2" /> Clear All History
+                  </button>
+                )}
+              </div>
+
               <div className="bg-white rounded-xl shadow-md overflow-hidden overflow-x-auto">
                 <table className="w-full text-left border-collapse text-sm">
                   <thead>
