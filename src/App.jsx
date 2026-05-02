@@ -5,7 +5,7 @@ import {
   onAuthStateChanged, signOut, setPersistence, browserLocalPersistence
 } from 'firebase/auth';
 import { 
-  getFirestore, collection, doc, setDoc, onSnapshot, query, deleteDoc, updateDoc 
+  getFirestore, collection, doc, setDoc, onSnapshot, query, deleteDoc, updateDoc, writeBatch 
 } from 'firebase/firestore';
 import { 
   Car, Ticket, User, Phone, MapPin, Image as ImageIcon, 
@@ -117,7 +117,7 @@ export default function App() {
       setWinnersData(data.sort((a, b) => b.round - a.round));
     });
 
-    // Fetch Admin Full History (Only fetch if admin tab is history to save bandwidth, but for simplicity fetch all here)
+    // Fetch Admin Full History
     const unsubHistory = onSnapshot(query(collection(db, 'artifacts', appId, 'public', 'data', 'lucky_history')), (snapshot) => {
       const data = [];
       snapshot.forEach(doc => data.push(doc.data()));
@@ -235,8 +235,10 @@ export default function App() {
     const timestamp = Date.now();
 
     try {
-      const promises = selectedNumbers.map(num => {
-        return setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'lucky_tickets', num), {
+      const batch = writeBatch(db);
+      selectedNumbers.forEach(num => {
+        const ticketRef = doc(db, 'artifacts', appId, 'public', 'data', 'lucky_tickets', num);
+        batch.set(ticketRef, {
           id: num,
           bookingId: bookingId,
           status: 'pending',
@@ -246,7 +248,7 @@ export default function App() {
           round: systemSettings.currentRound
         });
       });
-      await Promise.all(promises);
+      await batch.commit();
       
       setShowForm(false);
       setSelectedNumbers([]);
@@ -272,14 +274,16 @@ export default function App() {
     const approvedAt = Date.now();
 
     try {
-      const promises = booking.numbers.map(num => {
-        return updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'lucky_tickets', num), {
+      const batch = writeBatch(db);
+      booking.numbers.forEach(num => {
+        const ticketRef = doc(db, 'artifacts', appId, 'public', 'data', 'lucky_tickets', num);
+        batch.update(ticketRef, {
           status: 'success',
           approvedAt: approvedAt,
           securityCode: securityHash
         });
       });
-      await Promise.all(promises);
+      await batch.commit();
     } catch (err) { console.error(err); }
   };
 
@@ -288,10 +292,12 @@ export default function App() {
     if (!window.confirm("Are you sure you want to delete this booking?")) return;
     
     try {
-      const promises = booking.numbers.map(num => {
-        return deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'lucky_tickets', num));
+      const batch = writeBatch(db);
+      booking.numbers.forEach(num => {
+        const ticketRef = doc(db, 'artifacts', appId, 'public', 'data', 'lucky_tickets', num);
+        batch.delete(ticketRef);
       });
-      await Promise.all(promises);
+      await batch.commit();
     } catch (err) { console.error(err); }
   };
 
@@ -299,14 +305,17 @@ export default function App() {
     e.preventDefault();
     if (!isAdmin || !winNumberInput) return;
     
-    if (!window.confirm("ARE YOU SURE?\n\nThis will end the current round, declare a winner, archive all tickets to history, and RESET the board. This action cannot be undone.")) {
+    // Format to 3 digits (e.g. '5' becomes '005')
+    const paddedWinNumber = winNumberInput.padStart(3, '0');
+    
+    if (!window.confirm(`ARE YOU SURE?\n\nThis will end Round ${systemSettings.currentRound}, declare ${paddedWinNumber} as winner, archive all tickets, and RESET the board.`)) {
       return;
     }
 
-    const winningTicket = ticketsData[winNumberInput];
+    const winningTicket = ticketsData[paddedWinNumber];
     const winnerSummary = {
       round: systemSettings.currentRound,
-      winNumber: winNumberInput,
+      winNumber: paddedWinNumber,
       winnerName: winningTicket ? winningTicket.name : 'Unknown User',
       winnerPhone: winningTicket ? winningTicket.phone : 'No Phone',
       date: Date.now(),
@@ -315,39 +324,46 @@ export default function App() {
     };
 
     try {
+      const batch = writeBatch(db);
+
       // 1. Move all to history
-      const historyPromises = Object.values(ticketsData).map(t => {
-        return setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'lucky_history', `${systemSettings.currentRound}_${t.id}`), {
+      Object.values(ticketsData).forEach(t => {
+        const histRef = doc(db, 'artifacts', appId, 'public', 'data', 'lucky_history', `${systemSettings.currentRound}_${t.id}`);
+        batch.set(histRef, {
           ...t,
-          isWinner: t.id === winNumberInput,
+          isWinner: t.id === paddedWinNumber,
           archivedAt: Date.now()
         });
       });
-      await Promise.all(historyPromises);
 
       // 2. Save Winner Summary
-      await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'lucky_winners', `round_${systemSettings.currentRound}`), winnerSummary);
+      const winnerRef = doc(db, 'artifacts', appId, 'public', 'data', 'lucky_winners', `round_${systemSettings.currentRound}`);
+      batch.set(winnerRef, winnerSummary);
 
-      // 3. Delete all active tickets
-      const deletePromises = Object.keys(ticketsData).map(id => {
-        return deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'lucky_tickets', id));
+      // 3. Delete active tickets
+      Object.keys(ticketsData).forEach(id => {
+        const ticketRef = doc(db, 'artifacts', appId, 'public', 'data', 'lucky_tickets', id);
+        batch.delete(ticketRef);
       });
-      await Promise.all(deletePromises);
 
       // 4. Update Settings (Deactivate round)
-      await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'system_config', 'default'), {
+      const settingsRef = doc(db, 'artifacts', appId, 'public', 'data', 'system_config', 'default');
+      batch.set(settingsRef, {
         ...systemSettings,
         isRoundActive: false,
         latestWinner: winnerSummary
       });
 
+      // Commit all operations at once
+      await batch.commit();
+
       setShowEndRoundModal(false);
       setWinNumberInput('');
-      alert("Round ended successfully!");
+      alert("Round ended and saved to history successfully!");
 
     } catch (err) {
-      console.error(err);
-      alert("Error ending round.");
+      console.error("Batch Error:", err);
+      alert(`Error ending round: ${err.message}. Please check Firebase Security Rules.`);
     }
   };
 
