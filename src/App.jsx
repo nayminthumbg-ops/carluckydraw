@@ -5,7 +5,7 @@ import {
   onAuthStateChanged, signOut, setPersistence, browserLocalPersistence
 } from 'firebase/auth';
 import { 
-  getFirestore, collection, doc, setDoc, onSnapshot, query, deleteDoc, updateDoc, writeBatch 
+  getFirestore, collection, doc, setDoc, onSnapshot, query, deleteDoc, updateDoc 
 } from 'firebase/firestore';
 import { 
   Car, Ticket, User, Phone, MapPin, Image as ImageIcon, 
@@ -21,6 +21,7 @@ const getFirebaseConfig = () => {
   if (typeof __firebase_config !== 'undefined') {
     return JSON.parse(__firebase_config);
   }
+  // Hardcoded for Local / Vercel Build (Removed import.meta to avoid esbuild errors)
   return {
     apiKey: "AIzaSyBgCQIlUY43KLOw7W8h29WOgqdeEWy68fY",
     authDomain: "carluckydraw101.firebaseapp.com",
@@ -105,9 +106,20 @@ export default function App() {
       setLoading(false);
     }, (err) => { console.error(err); setLoading(false); });
 
-    // Fetch System Settings
+    // Fetch System Settings (With NaN Fix)
     const unsubSettings = onSnapshot(doc(db, 'artifacts', appId, 'public', 'data', 'system_config', 'default'), (docSnap) => {
-      if (docSnap.exists()) { setSystemSettings(docSnap.data()); }
+      if (docSnap.exists()) { 
+        const data = docSnap.data();
+        let safeRound = parseInt(data.currentRound);
+        if (isNaN(safeRound)) safeRound = 1; // Auto-fix NaN to 1
+
+        setSystemSettings(prev => ({ 
+          ...prev, 
+          ...data,
+          currentRound: safeRound,
+          isRoundActive: data.isRoundActive !== undefined ? data.isRoundActive : prev.isRoundActive
+        })); 
+      }
     });
 
     // Fetch Winners (For Public History)
@@ -235,20 +247,18 @@ export default function App() {
     const timestamp = Date.now();
 
     try {
-      const batch = writeBatch(db);
-      selectedNumbers.forEach(num => {
-        const ticketRef = doc(db, 'artifacts', appId, 'public', 'data', 'lucky_tickets', num);
-        batch.set(ticketRef, {
+      const promises = selectedNumbers.map(num => {
+        return setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'lucky_tickets', num), {
           id: num,
           bookingId: bookingId,
           status: 'pending',
           ...formData,
           userId: user.uid,
           timestamp: timestamp,
-          round: systemSettings.currentRound
+          round: parseInt(systemSettings.currentRound) || 1
         });
       });
-      await batch.commit();
+      await Promise.all(promises);
       
       setShowForm(false);
       setSelectedNumbers([]);
@@ -264,7 +274,10 @@ export default function App() {
   const handleSaveSettings = async (e) => {
     e.preventDefault();
     if (!isAdmin) return;
-    await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'system_config', 'default'), systemSettings);
+    await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'system_config', 'default'), {
+      ...systemSettings,
+      currentRound: parseInt(systemSettings.currentRound) || 1
+    });
     alert('Settings updated successfully!');
   };
 
@@ -274,16 +287,14 @@ export default function App() {
     const approvedAt = Date.now();
 
     try {
-      const batch = writeBatch(db);
-      booking.numbers.forEach(num => {
-        const ticketRef = doc(db, 'artifacts', appId, 'public', 'data', 'lucky_tickets', num);
-        batch.update(ticketRef, {
+      const promises = booking.numbers.map(num => {
+        return updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'lucky_tickets', num), {
           status: 'success',
           approvedAt: approvedAt,
           securityCode: securityHash
         });
       });
-      await batch.commit();
+      await Promise.all(promises);
     } catch (err) { console.error(err); }
   };
 
@@ -292,12 +303,10 @@ export default function App() {
     if (!window.confirm("Are you sure you want to delete this booking?")) return;
     
     try {
-      const batch = writeBatch(db);
-      booking.numbers.forEach(num => {
-        const ticketRef = doc(db, 'artifacts', appId, 'public', 'data', 'lucky_tickets', num);
-        batch.delete(ticketRef);
+      const promises = booking.numbers.map(num => {
+        return deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'lucky_tickets', num));
       });
-      await batch.commit();
+      await Promise.all(promises);
     } catch (err) { console.error(err); }
   };
 
@@ -305,16 +314,17 @@ export default function App() {
     e.preventDefault();
     if (!isAdmin || !winNumberInput) return;
     
-    // Format to 3 digits (e.g. '5' becomes '005')
+    // Safety check for current round
+    const activeRound = parseInt(systemSettings.currentRound) || 1;
     const paddedWinNumber = winNumberInput.padStart(3, '0');
     
-    if (!window.confirm(`ARE YOU SURE?\n\nThis will end Round ${systemSettings.currentRound}, declare ${paddedWinNumber} as winner, archive all tickets, and RESET the board.`)) {
+    if (!window.confirm(`ARE YOU SURE?\n\nThis will end Round ${activeRound}, declare ${paddedWinNumber} as winner, archive all tickets, and RESET the board.`)) {
       return;
     }
 
     const winningTicket = ticketsData[paddedWinNumber];
     const winnerSummary = {
-      round: systemSettings.currentRound,
+      round: activeRound,
       winNumber: paddedWinNumber,
       winnerName: winningTicket ? winningTicket.name : 'Unknown User',
       winnerPhone: winningTicket ? winningTicket.phone : 'No Phone',
@@ -324,46 +334,40 @@ export default function App() {
     };
 
     try {
-      const batch = writeBatch(db);
+      // 1. Save Winner Summary
+      await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'lucky_winners', `round_${activeRound}`), winnerSummary);
 
-      // 1. Move all to history
-      Object.values(ticketsData).forEach(t => {
-        const histRef = doc(db, 'artifacts', appId, 'public', 'data', 'lucky_history', `${systemSettings.currentRound}_${t.id}`);
-        batch.set(histRef, {
+      // 2. Update Settings (Deactivate round)
+      await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'system_config', 'default'), {
+        ...systemSettings,
+        isRoundActive: false,
+        latestWinner: winnerSummary,
+        currentRound: activeRound
+      });
+
+      // 3. Move all to history (Using Promise.all to bypass 500 batch limit)
+      const historyPromises = Object.values(ticketsData).map(t => {
+        return setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'lucky_history', `${activeRound}_${t.id}`), {
           ...t,
           isWinner: t.id === paddedWinNumber,
           archivedAt: Date.now()
         });
       });
+      await Promise.all(historyPromises);
 
-      // 2. Save Winner Summary
-      const winnerRef = doc(db, 'artifacts', appId, 'public', 'data', 'lucky_winners', `round_${systemSettings.currentRound}`);
-      batch.set(winnerRef, winnerSummary);
-
-      // 3. Delete active tickets
-      Object.keys(ticketsData).forEach(id => {
-        const ticketRef = doc(db, 'artifacts', appId, 'public', 'data', 'lucky_tickets', id);
-        batch.delete(ticketRef);
+      // 4. Delete active tickets
+      const deletePromises = Object.keys(ticketsData).map(id => {
+        return deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'lucky_tickets', id));
       });
-
-      // 4. Update Settings (Deactivate round)
-      const settingsRef = doc(db, 'artifacts', appId, 'public', 'data', 'system_config', 'default');
-      batch.set(settingsRef, {
-        ...systemSettings,
-        isRoundActive: false,
-        latestWinner: winnerSummary
-      });
-
-      // Commit all operations at once
-      await batch.commit();
+      await Promise.all(deletePromises);
 
       setShowEndRoundModal(false);
       setWinNumberInput('');
       alert("Round ended and saved to history successfully!");
 
     } catch (err) {
-      console.error("Batch Error:", err);
-      alert(`Error ending round: ${err.message}. Please check Firebase Security Rules.`);
+      console.error("End Round Error:", err);
+      alert(`Error ending round: ${err.message}. Firebase Rules များကို သေချာစစ်ဆေးပါ။`);
     }
   };
 
@@ -371,10 +375,12 @@ export default function App() {
     if (!isAdmin) return;
     if (!window.confirm("Start new round? This will open the board for new users.")) return;
 
+    const nextRound = (parseInt(systemSettings.currentRound) || 1) + 1;
+
     await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'system_config', 'default'), {
       ...systemSettings,
       isRoundActive: true,
-      currentRound: systemSettings.currentRound + 1
+      currentRound: nextRound
     });
   };
 
@@ -447,7 +453,7 @@ export default function App() {
             <>
               <div className="mb-6 bg-white p-4 rounded-xl shadow-sm border-l-4 border-yellow-500 flex flex-col md:flex-row md:justify-between items-center space-y-4 md:space-y-0">
                 <div>
-                  <h2 className="text-xl font-bold text-slate-800">Round {systemSettings.currentRound} - မဲလက်မှတ်များ</h2>
+                  <h2 className="text-xl font-bold text-slate-800">Round {parseInt(systemSettings.currentRound) || 1} - မဲလက်မှတ်များ</h2>
                   <p className="text-sm text-gray-500">မိမိနှစ်သက်ရာ ဂဏန်းများကို အများအပြား ရွေးချယ်နိုင်ပါသည်</p>
                 </div>
                 <div className="flex space-x-4 text-sm font-medium">
@@ -543,7 +549,7 @@ export default function App() {
             <div className="animate-in fade-in">
               <div className="flex flex-col sm:flex-row justify-between items-center mb-6 space-y-4 sm:space-y-0">
                 <h2 className="text-2xl font-bold text-slate-800 flex items-center">
-                  <ShieldCheck className="mr-2 text-yellow-500"/> Bookings (Round {systemSettings.currentRound})
+                  <ShieldCheck className="mr-2 text-yellow-500"/> Bookings (Round {parseInt(systemSettings.currentRound) || 1})
                 </h2>
                 
                 <div className="flex space-x-2">
@@ -736,7 +742,7 @@ export default function App() {
             <div className="bg-red-600 p-4 text-white text-center">
               <Trophy className="w-10 h-10 mx-auto mb-2 opacity-90" />
               <h3 className="font-black text-xl">DECLARE WINNER</h3>
-              <p className="text-sm opacity-90">End Round {systemSettings.currentRound}</p>
+              <p className="text-sm opacity-90">End Round {parseInt(systemSettings.currentRound) || 1}</p>
             </div>
             <form onSubmit={handleEndRound} className="p-6 space-y-4">
               <div className="bg-red-50 text-red-800 p-3 rounded-lg text-sm font-bold border border-red-200">
