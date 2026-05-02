@@ -978,15 +978,15 @@ export default function App() {
               <div className="px-6 pt-12 pb-6 relative z-10 mt-2">
                 <div className="space-y-4">
                   <div className="bg-slate-800/60 rounded-xl p-4 border border-slate-700/50 backdrop-blur-sm">
-                    <div className="grid grid-cols-2 gap-y-3">
+                    <div className="grid grid-cols-2 gap-y-3 items-center">
                       <div className="text-gray-400 text-xs uppercase font-bold">Name</div>
-                      <div className="text-white font-bold text-right truncate">{showVoucher.name}</div>
+                      <div className="text-white font-bold text-right break-words leading-relaxed pb-1">{showVoucher.name}</div>
                       
                       <div className="text-gray-400 text-xs uppercase font-bold">Phone</div>
-                      <div className="text-white font-bold text-right">{showVoucher.phone}</div>
+                      <div className="text-white font-bold text-right leading-relaxed pb-1">{showVoucher.phone}</div>
                       
                       <div className="text-gray-400 text-xs uppercase font-bold">Total Tickets</div>
-                      <div className="text-white font-bold text-right">{showVoucher.numbers.length}</div>
+                      <div className="text-white font-bold text-right leading-relaxed pb-1">{showVoucher.numbers.length}</div>
                     </div>
                   </div>
 
