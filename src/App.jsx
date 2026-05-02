@@ -72,6 +72,7 @@ export default function App() {
   const [showLoginModal, setShowLoginModal] = useState(false);
   const [loginForm, setLoginForm] = useState({ email: '', password: '' });
   const [loginError, setLoginError] = useState('');
+  const [isDownloading, setIsDownloading] = useState(false);
   const clickTimeoutRef = useRef(null);
 
   // Form State
@@ -382,9 +383,6 @@ export default function App() {
     });
   };
 
-  // ----------------------------------------------------
-  // New Feature: Clear All History Data
-  // ----------------------------------------------------
   const handleClearHistory = async () => {
     if (!isAdmin) return;
     if (!window.confirm("သတိပြုရန်: History နှင့် ကံထူးရှင် မှတ်တမ်းအားလုံးကို အပြီးတိုင် ဖျက်ပစ်မည်မှာ သေချာပါသလား? ဤလုပ်ဆောင်ချက်ကို နောက်ပြန်ဆုတ်၍ မရပါ။")) return;
@@ -406,6 +404,45 @@ export default function App() {
     } catch (err) {
       console.error("Clear History Error:", err);
       alert("မှတ်တမ်းဖျက်ရာတွင် အမှားအယွင်းရှိနေပါသည်။");
+    }
+  };
+
+  // ----------------------------------------------------
+  // New Feature: Download E-Ticket as Image
+  // ----------------------------------------------------
+  const handleDownloadVoucher = () => {
+    const voucherElement = document.getElementById('voucher-capture');
+    if (!voucherElement) return;
+    
+    setIsDownloading(true);
+
+    // Dynamic script loading for html2canvas
+    const downloadImage = () => {
+      window.html2canvas(voucherElement, { 
+        useCORS: true, 
+        scale: 2, // High resolution
+        backgroundColor: '#1a1a1a'
+      }).then(canvas => {
+        const link = document.createElement('a');
+        const firstTicketNum = showVoucher.numbers[0] || 'Unknown';
+        link.download = `E-Ticket-${firstTicketNum}.jpg`;
+        link.href = canvas.toDataURL('image/jpeg', 0.9);
+        link.click();
+        setIsDownloading(false);
+      }).catch(err => {
+        console.error("Error creating image:", err);
+        alert("Image သိမ်းဆည်းရာတွင် အမှားအယွင်းဖြစ်ပေါ်ခဲ့ပါသည်။");
+        setIsDownloading(false);
+      });
+    };
+
+    if (!window.html2canvas) {
+      const script = document.createElement('script');
+      script.src = 'https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js';
+      script.onload = downloadImage;
+      document.body.appendChild(script);
+    } else {
+      downloadImage();
     }
   };
 
@@ -902,8 +939,12 @@ export default function App() {
         <div className="fixed inset-0 bg-slate-900/90 backdrop-blur-md flex items-center justify-center p-4 z-[60] overflow-y-auto">
           <div className="relative my-8">
             <button onClick={() => setShowVoucher(null)} className="absolute -top-12 right-0 text-white font-bold bg-slate-800 px-4 py-2 rounded-full hover:bg-slate-700 z-10">အပိတ် (X)</button>
-            <button className="absolute -top-12 left-0 text-slate-900 font-bold bg-yellow-400 px-4 py-2 rounded-full hover:bg-yellow-300 flex items-center space-x-2 z-10">
-              <Download className="w-4 h-4"/> <span>Save Image</span>
+            <button 
+              onClick={handleDownloadVoucher} 
+              disabled={isDownloading}
+              className={`absolute -top-12 left-0 text-slate-900 font-bold bg-yellow-400 px-4 py-2 rounded-full hover:bg-yellow-300 flex items-center space-x-2 z-10 shadow-lg ${isDownloading ? 'opacity-50 cursor-not-allowed' : ''}`}
+            >
+              <Download className="w-4 h-4"/> <span>{isDownloading ? 'Saving...' : 'Save Image'}</span>
             </button>
 
             <div id="voucher-capture" className="bg-[#1a1a1a] w-[90vw] max-w-md sm:min-w-[400px] rounded-2xl shadow-2xl overflow-hidden border border-yellow-500/30 relative mx-auto">
@@ -920,7 +961,7 @@ export default function App() {
               </div>
 
               <div className="relative h-48 w-full bg-slate-800 z-10 border-y border-yellow-500/10">
-                <img src={systemSettings.ticketImage} alt="Prize" className="w-full h-full object-cover opacity-80" />
+                <img src={systemSettings.ticketImage} alt="Prize" className="w-full h-full object-cover opacity-80" crossOrigin="anonymous" />
                 <div className="absolute inset-0 bg-gradient-to-t from-[#1a1a1a] via-transparent to-transparent"></div>
                 
                 {/* Grouped Numbers Badge */}
