@@ -1,9 +1,6 @@
 import React from 'react'
 import ReactDOM from 'react-dom/client'
 
-// Local (VS Code) တွင် အသုံးပြုရန် အောက်ပါ ၂ ကြောင်း၏ ရှေ့မှ // များကို ဖျက်၍ အသုံးပြုပါ။
-import App from './App.jsx'
-import './index.css'
 
 // ဤသည်မှာ Canvas တွင် Error မပြစေရန် ရေးသားထားသော ယာယီကုဒ်ဖြစ်ပါသည်။
 const App = () => (
